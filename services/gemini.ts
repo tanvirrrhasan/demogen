@@ -1,8 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { DemoCategory } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 /**
  * Generates images using Imagen based on inputs.
  * Supports text-to-image batching.
@@ -12,6 +10,14 @@ export const generateImagesBatch = async (
   category: string,
   totalCount: number
 ): Promise<string[]> => {
+  
+  // Initialize AI client lazily to avoid top-level errors if key is missing during initial load
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key is missing. Please check your settings.");
+  }
+  
+  const ai = new GoogleGenAI({ apiKey });
   
   // Refine the prompt to ensure high quality demo images
   let refinedPrompt = "";
