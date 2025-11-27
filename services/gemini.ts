@@ -2,8 +2,9 @@ import { GoogleGenAI } from "@google/genai";
 import { DemoCategory } from "../types";
 
 /**
- * Generates images using Imagen based on inputs.
- * Supports text-to-image batching.
+ * Generates images using Gemini Flash Image model.
+ * This model is chosen because it is generally accessible without strict billing requirements
+ * unlike the Imagen standalone models.
  */
 export const generateImagesBatch = async (
   prompt: string,
@@ -11,62 +12,66 @@ export const generateImagesBatch = async (
   totalCount: number
 ): Promise<string[]> => {
   
-  // Initialize AI client lazily to avoid top-level errors if key is missing during initial load
+  // Initialize AI client lazily
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    throw new Error("API Key is missing. Please check your settings.");
+    throw new Error("API Key is missing. Please check your settings in Vercel.");
   }
   
   const ai = new GoogleGenAI({ apiKey });
   
-  // Refine the prompt to ensure high quality demo images
   let refinedPrompt = "";
-  
   if (category === DemoCategory.NONE) {
-     refinedPrompt = `High quality, professional demo photo: ${prompt}. Photorealistic, well-lit, 4k resolution, commercial photography style.`;
+     refinedPrompt = `Generate a high quality, professional demo photo: ${prompt}. Photorealistic, 4k resolution.`;
   } else {
-     refinedPrompt = `High quality, professional demo photo of ${category}: ${prompt}. Photorealistic, well-lit, 4k resolution, commercial photography style.`;
+     refinedPrompt = `Generate a high quality, professional demo photo of ${category}: ${prompt}. Photorealistic, 4k resolution.`;
   }
 
   try {
-    const allImages: string[] = [];
-
-    // Use imagen-4.0-generate-001 for pure text-to-image with efficient batching
-    const MAX_PER_REQUEST = 4;
-    const batches = Math.ceil(totalCount / MAX_PER_REQUEST);
     const promises = [];
 
-    for (let i = 0; i < batches; i++) {
-      const countForThisBatch = Math.min(MAX_PER_REQUEST, totalCount - (i * MAX_PER_REQUEST));
-      
+    // gemini-2.5-flash-image generates 1 image per request via generateContent.
+    // We run parallel requests to generate the requested batch size.
+    for (let i = 0; i < totalCount; i++) {
       promises.push(
-        ai.models.generateImages({
-          model: 'imagen-4.0-generate-001',
-          prompt: refinedPrompt,
+        ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: refinedPrompt,
           config: {
-            numberOfImages: countForThisBatch,
-            aspectRatio: '1:1',
-            outputMimeType: 'image/jpeg',
+            imageConfig: {
+              aspectRatio: '1:1'
+            }
           },
         })
       );
     }
 
     const responses = await Promise.all(promises);
+    const allImages: string[] = [];
     
     responses.forEach(response => {
-      if (response.generatedImages) {
-        response.generatedImages.forEach(img => {
-          if (img.image.imageBytes) {
-            allImages.push(`data:image/jpeg;base64,${img.image.imageBytes}`);
+      const parts = response.candidates?.[0]?.content?.parts;
+      if (parts) {
+        for (const part of parts) {
+          // Check for inline data (image)
+          if (part.inlineData && part.inlineData.data) {
+            allImages.push(`data:image/png;base64,${part.inlineData.data}`);
           }
-        });
+        }
       }
     });
 
+    if (allImages.length === 0) {
+      throw new Error("No images were returned by the model.");
+    }
+
     return allImages;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error generating images:", error);
+    // Provide a user-friendly error message if it's a permission/billing issue
+    if (error.message?.includes('400') || error.message?.includes('billed') || error.message?.includes('PERMISSION_DENIED')) {
+       throw new Error("API Error: Ensure your API key is valid. If using a free key, limits may apply.");
+    }
     throw error;
   }
 };
